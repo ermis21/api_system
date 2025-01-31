@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+transformers
+torch
+beautifulsoup4
+nvidia-ml-py
+requests
+packaging
+protobuf
+sentencepiece
+pydantic
