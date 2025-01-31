@@ -3,16 +3,13 @@ from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo, nvmlShutdown
 from contextlib import asynccontextmanager
-import torch
 import numpy as np
-from datetime import datetime, timedelta
-import threading
-import time
+from datetime import datetime
 from typing import Dict, List
-import uuid
 from threading import Lock
 from huggingface_hub import login
-import os
+import torch, threading, time, os
+
 token = os.getenv("HUGGING_FACE_HUB_TOKEN")
 login(token=token)
 
@@ -28,15 +25,18 @@ inactivity_thr = 60
 # Request models
 class LoadModelRequest(BaseModel):
     model_name: str = "gpt2"
-
-class ChangeModelRequest(BaseModel):
-    new_model_name: str
-
-class InferenceRequest(BaseModel):
-    text: str
     max_new_tokens: int = 1000
     temperature: float = 0.7
     repetition_penalty: float = 1.1
+
+class ChangeModelRequest(BaseModel):
+    new_model_name: str
+    max_new_tokens: int = 1000
+    temperature: float = 0.7
+    repetition_penalty: float = 1.1
+
+class InferenceRequest(BaseModel):
+    text: str
     session_id: str
 
 class ChangeInactivityThresholdRequest(BaseModel):
@@ -48,7 +48,7 @@ class SystemPromptRequest(BaseModel):
 # Global variables
 system_prompt = "You are a helpful assistant."
 tokenizer = None
-current_model = None
+current_model = "gpt2"
 model_pipeline = None
 last_request_time = datetime.now()
 vram_lock = threading.Lock()
@@ -70,14 +70,12 @@ def get_or_create_session(session_id: str):
         return session_histories[session_id]
 
 def unload_model():
-    global model_pipeline, current_model
+    global model_pipeline
     with vram_lock:
         if model_pipeline is not None:
             del model_pipeline
-            del current_model
             torch.cuda.empty_cache()
             model_pipeline = None
-            current_model = None
             print("Model unloaded from VRAM")
 
 def check_inactivity():
@@ -113,7 +111,7 @@ def get_model_size(repo_id, branch="main"):
 
 @app.post("/load_model")
 async def load_model(request: LoadModelRequest = Body(...)):
-    global model_pipeline, current_model, timer, last_request_time
+    global model_pipeline, current_model, timer, last_request_time, tokenizer
     
     last_request_time = datetime.now()
     
@@ -128,15 +126,20 @@ async def load_model(request: LoadModelRequest = Body(...)):
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(request.model_name)
-        model = AutoModelForCausalLM.from_pretrained(request.model_name)#, trust_remote_code = True)
-        
+        try:
+            model = AutoModelForCausalLM.from_pretrained(request.model_name, trust_remote_code = True)
+        except:
+            model = AutoModelForCausalLM.from_pretrained(request.model_name)
+
         model_config = model.config.to_dict()
-        supports_flash_attention = "flash_attention_2" in model_config
         pipeline_kwargs = {"model": model, "tokenizer": tokenizer}
-        if supports_flash_attention:
-            pipeline_kwargs["flash_attention_2"] = True
+        if "flash_attention_2" in model_config: pipeline_kwargs["flash_attention_2"] = True
+        if "temperature" in model_config: pipeline_kwargs["temperature"] = request.temperature
+        if "max_new_tokens" in model_config: pipeline_kwargs["max_new_tokens"] = request.max_new_tokens
+        if "repetition_penalty" in model_config:pipeline_kwargs["repetition_penalty"] = request.repetition_penalty
         pipeline_kwargs["device"] = 0 if torch.cuda.is_available() else -1
-        model_pipeline = pipeline("text-generation", **pipeline_kwargs, temperature = 0.1)
+
+        model_pipeline = pipeline("text-generation", **pipeline_kwargs)
 
         current_model = request.model_name
     except Exception as e:
@@ -151,6 +154,7 @@ async def load_model(request: LoadModelRequest = Body(...)):
 
 @app.post("/change_model")
 async def change_model(request: ChangeModelRequest = Body(...)):
+    global model_pipeline, tokenizer
 
     free_vram = np.around(get_free_vram(),decimals=0)
     model_ram = get_model_size(request.new_model_name)*2 # Empiricaly desided 200%
@@ -166,7 +170,7 @@ async def infer(request: InferenceRequest = Body(...)):
     global last_request_time
     
     if model_pipeline is None:
-        raise HTTPException(status_code=400, detail="No model loaded")
+        await load_model(LoadModelRequest(model_name=current_model))
     
     last_request_time = datetime.now()
     
@@ -184,10 +188,9 @@ async def update_system_prompt(request: SystemPromptRequest = Body(...)):
 
 @app.post("/chat")
 async def infer(request: InferenceRequest = Body(...)):
-    global model_pipeline, tokenizer
-    
+
     if None in (model_pipeline, tokenizer):
-        raise HTTPException(400, "Model/tokenizer not loaded")
+        await load_model(LoadModelRequest(model_name=current_model))
     
     try:
         # Get or create session history
@@ -207,11 +210,11 @@ async def infer(request: InferenceRequest = Body(...)):
         result = model_pipeline(formatted_input)[0]['generated_text']
         
         # Add assistant response to history
-        history.append({"role": "assistant", "content": result})
+        history.append({"role": "assistant", "content": result.split('|>\n')[-1]})
         
         return {
             "session_id": request.session_id,
-            "result": result,
+            "result": result.split('|>\n')[-1],
             "full_history": history
         }
     except Exception as e:

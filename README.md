@@ -22,8 +22,11 @@ POST /load_model
 **Request Body:**
 ```json
 {
-  "model_name": "gpt2"
-}
+  "model_name": "gpt2",
+  "max_new_tokens": 100,        # Default 1000
+  "temperature": 0.8,           # Default 0.7
+  "repetition_penalty": 1.2,    # Default 1.1
+} 
 ```
 **Response:**
 ```json
@@ -41,7 +44,10 @@ POST /change_model
 **Request Body:**
 ```json
 {
-  "new_model_name": "new_model"
+  "new_model_name": "new_model",
+  "max_new_tokens": 300,        # Default 1000
+  "temperature": 1,             # Default 0.7
+  "repetition_penalty": 0,      # Default 1.1
 }
 ```
 **Response:**
@@ -60,18 +66,15 @@ POST /infer
 **Request Body:**
 ```json
 {
-  "text": "Hello, how are you?",
-  "max_new_tokens": 100,
-  "temperature": 0.7,
-  "repetition_penalty": 1.1,
+  "text": "Hello, how are you",
   "session_id": "12345"
 }
 ```
 **Response:**
 ```json
 {
-  "input": "Hello, how are you?",
-  "result": "I am fine, thank you!"
+  "input": "Hello, how are you",
+  "result": "Hello, how are you doing today?"
 }
 ```
 
