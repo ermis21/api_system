@@ -144,12 +144,6 @@ POST /change_inactivity_threshold
 - Models are unloaded if inactivity exceeds the threshold.
 - Flash attention is enabled if the model supports it.
 
-## Running the API
-Run the following command:
-```
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
 ## Notes
 - Ensure `HUGGING_FACE_HUB_TOKEN` is set before running the API.
 - The API runs on port 8000 by default.
